@@ -76,9 +76,9 @@ event_T5_detection TOF_reconstructor::Return_position(const int event_nr,
 	for (int i = 0; i < N_T5_SCINTS; i++){	
 		if (T5_times[i].empty() || T5_times[i+8].empty()) continue;
 		for (const auto& sipm_time_a : T5_times[i]){
-			bool time_a_valid = (sipm_time_a > EXPECTED_DETECTION_TIME_MAX || sipm_time_a < EXPECTED_DETECTION_TIME_MIN);
+			bool time_a_valid = (sipm_time_a < EXPECTED_DETECTION_TIME_MAX && sipm_time_a > EXPECTED_DETECTION_TIME_MIN);
 			for (const auto& sipm_time_b : T5_times[i+8]){
-				bool time_b_valid = sipm_time_b > EXPECTED_DETECTION_TIME_MAX || sipm_time_b < EXPECTED_DETECTION_TIME_MIN;
+				bool time_b_valid = (sipm_time_b < EXPECTED_DETECTION_TIME_MAX || sipm_time_b > EXPECTED_DETECTION_TIME_MIN);
 				T5_hit hit;
 				hit.sipm_time_a = sipm_time_a;
 				hit.sipm_time_b = sipm_time_b;
@@ -141,7 +141,8 @@ event_T5_detection TOF_reconstructor::Return_position(const int event_nr,
 			unique_scints.insert(hit.scintillator_id.value());	
 		}
 		if (hit.quality == HitQuality::OutOfBounds) detection.HasOutOfBounds = true;
-		if (!hit.is_in_time_window) detection.HasOutOfTimeWindow = true;
+		if (!hit.is_in_time_window && hit.quality != HitQuality::AccidentalCoincidence) detection.HasOutOfTimeWindow = true;
+		if (hit.is_in_time_window && hit.is_valid_hit) detection.HasInTimeWindow = true;
 	}
 	if (n_valid_hits > 1) detection.HasMultipleValidHits = true;
 	detection.HasMultipleScintillatorsHit = (unique_scints.size() > 1);

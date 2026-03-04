@@ -73,6 +73,7 @@ struct event_T5_detection{
 	bool HasMultipleScintillatorsHit = false;
 	bool HasOutOfBounds = false;
 	bool HasOutOfTimeWindow = false;
+	bool HasInTimeWindow = false;
 	std::vector<T5_hit> T5_hits;
 };
 

@@ -1,3 +1,4 @@
+#include <ostream>
 #include <vector>
 #include <iostream>
 #include <string>
@@ -95,9 +96,15 @@ int main(int argc, char** argv){
 	int n_events = tree->GetEntries();
 	int verb = 1000;
 	int n_events_with_multiple_valid_hits = 0;
+	int n_events_with_valid_hits_in_expected_window = 0;
+	int n_events_with_multiple_scint_hits = 0;
+	int n_events_with_multiple_valid_hits_had_one_in_expected_window = 0;
+	int n_invalid_hits = 0;
+	int n_events_out_of_bounds = 0;
 
 	vector<event_T5_detection> invalid_T5_hits;
 	vector<event_T5_detection> multivalidhits_events;
+	
 
 	for(size_t i = 0; i < n_events; i++){
 		tree->GetEntry(i);
@@ -130,13 +137,18 @@ int main(int argc, char** argv){
 
 		auto detections = recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids, *arr_pmt_times);
 
-		if (recon.HasValidHits(detections.T5_hits)) n_T5_valid_events++;
-		// HasWeirdHits == 0 -- reconstruction outside the scintillator; == 1 -- multiple hits in event
-		if (recon.HasMultiValidHits(detections.T5_hits)){
+		if (detections.HasValidHit) n_T5_valid_events++;
+		if (detections.HasMultipleValidHits){
 			n_events_with_multiple_valid_hits++;
 			multivalidhits_events.push_back(detections);
+			if (detections.HasInTimeWindow) n_events_with_multiple_valid_hits_had_one_in_expected_window++;
+			if (detections.HasMultipleScintillatorsHit) n_events_with_multiple_scint_hits++;
 		}
-		if (!recon.HasValidHits(detections.T5_hits)) invalid_T5_hits.push_back(detections);
+		if (detections.HasInTimeWindow) n_events_with_valid_hits_in_expected_window++;
+		if (detections.HasHit && !detections.HasValidHit) {invalid_T5_hits.push_back(detections); n_invalid_hits++;}
+		if (detections.HasOutOfBounds) n_events_out_of_bounds++;
+
+
 		int n_hits_in_T5_in_single_event = 0;
 		for (int i = 0; i < cut.Get_T5_ids().size(); i++){
 			auto T5_id = cut.Get_T5_ids().at(i);
@@ -147,7 +159,7 @@ int main(int argc, char** argv){
 		hists.fill("n_event_hits", n_hits_in_T5_in_single_event);	
 		
 		for (const auto& hit : detections.T5_hits){
-			if (!hit.is_valid_hit){
+			if (!hit.is_valid_hit || hit.quality != HitQuality::Perfect){
 				continue;
 			}
 			hists.fill("positions", hit.position->first, hit.position->second);
@@ -251,8 +263,16 @@ int main(int argc, char** argv){
 
 	cout << endl << n_pass_cut << " events out of " << n_events << " passed cuts" << endl;
 	cout << n_T5_valid_events << " events got a valid reconstruction -- "
-	     << n_pass_cut - n_T5_valid_events << " were reconstructed out of bounds?" << endl
-	     << n_events_with_multiple_valid_hits << " events had multiple valid hits" 
+	     << n_pass_cut - n_T5_valid_events << " were mismatched events?" << endl
+	     << n_invalid_hits << " events were invalid" << endl
+	     << n_events_with_valid_hits_in_expected_window << " events of them had a hit in the expected time window" << endl
+	     << n_events_out_of_bounds << " events had a reconstruction out of bounds" << endl
+	     << endl
+		
+
+	     << n_events_with_multiple_valid_hits << " events had multiple valid hits -- " 
+	     << n_events_with_multiple_valid_hits_had_one_in_expected_window << " of those had at least one hit in the expected time window" << endl
+	     << n_events_with_multiple_scint_hits << " events had hits in multiple scintillators -- in the expected time window" << endl
 	     << endl; 
 	cout << endl;
 
