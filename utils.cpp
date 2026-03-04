@@ -2,7 +2,21 @@
 #include "ROOT/RVec.hxx"
 #include "TCanvas.h"
 #include "TString.h"
+#include "buffer.h"
+#include <TLatex.h>
+#include <string>
 
+int RUN_NUMBER = 0;
+int BEAM_MOMENTUM = 0;
+
+void write_description(){
+	TString text = "Run number = " + std::to_string(RUN_NUMBER) + ", Beam momentum = " + std::to_string(BEAM_MOMENTUM) + " MeV/c charged hadron";
+	TLatex txt;
+	txt.SetTextSize(0.025);
+	txt.SetTextAlign(13);
+	txt.DrawLatexNDC(0.10, 0.92, text.Data());
+
+}
 
 // Cutting class
 
@@ -20,6 +34,8 @@ Cuts::Cuts():
 {}
 
 int Cuts::get_T5_board(){ return T5_board_id;}
+
+RVecI& Cuts::Get_T5_ids(){return T5_ids;}
 
 bool Cuts::hit_T0_T1(const RVecI& bm_time_ids, const RVecI& bm_charge_ids){
 	for (auto val : T0_ids){
@@ -157,23 +173,50 @@ void Histograms::print(const std::string& name){
 	auto canvas = new TCanvas(c_name, c_name, m_canvas_default_size_x, m_canvas_default_size_y);
 	if (m_hists_map[name] != nullptr) {
 		if (m_hists_map[name]->InheritsFrom("TH2")) {
+			m_hists_map[name]->SetStats(0);
 			m_hists_map[name]->Draw("COLZ");
+			write_description();
 		} else {
-			m_hists_map[name]->Draw("HIST");
+			m_hists_map[name]->SetStats(1);
+			m_hists_map[name]->Draw("");
+			write_description();
 		}
 	}
 	TString out_name = name + ".png";
 	canvas->Print(out_name);
 }
+void Histograms::print_exclusive(const std::string& name, int c_size_x, int c_size_y){
+	TString c_name = "c_" + name;
+	auto canvas = new TCanvas(c_name, c_name, c_size_x, c_size_y);
+	canvas->SetRightMargin(0.16);
+	if (m_hists_map[name] != nullptr) {
+		special_hists.push_back(name);
+		if (m_hists_map[name]->InheritsFrom("TH2")) {
+			m_hists_map[name]->SetStats(0);
+			m_hists_map[name]->Draw("COLZ");
+			write_description();
+		} else {
+			m_hists_map[name]->SetStats(1);
+			m_hists_map[name]->Draw("");
+			write_description();
+		}
+	}
+	TString out_name = name + ".png";
+	canvas->Print(out_name);
+}
+
 void Histograms::print_all(){
 	for (const auto& [name, hist] : m_hists_map){
+		if (std::find(special_hists.begin(), special_hists.end(), name) != special_hists.end()) continue;
 		TString c_name = "c_" + name;
 		auto canvas = new TCanvas(c_name, c_name, m_canvas_default_size_x, m_canvas_default_size_y);
 		if (hist != nullptr) {
 			if (hist->InheritsFrom("TH2")) {
 				hist->Draw("COLZ");
+				write_description();
 			} else {
 				hist->Draw("");
+				write_description();
 			}
 		}
 		TString out_name = name + ".png";

@@ -11,7 +11,10 @@
 
 using namespace ROOT;
 
+extern int RUN_NUMBER;
+extern int BEAM_MOMENTUM;
 
+void write_description();
 
 class Cuts{
 	private:
@@ -32,6 +35,8 @@ class Cuts{
 		Cuts();
 
 		int get_T5_board();
+
+		RVecI& Get_T5_ids();
 		
 		bool hit_T0_T1(const RVecI& bm_time_ids, const RVecI& bm_charge_ids);
 
@@ -88,6 +93,7 @@ class Histograms{
 		void draw(const std::string& name);
 		void draw(const std::string& name, int c_size_x, int c_size_y);
 		void print(const std::string& name);
+		void print_exclusive(const std::string& name, int c_size_x, int c_size_y);
 		void print_all();
 		void save_all(const std::string& output_filename);
 		TH1* get_histogram(const std::string& name);

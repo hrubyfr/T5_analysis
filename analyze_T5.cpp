@@ -2,6 +2,7 @@
 #include <iostream>
 #include <string>
 #include <iomanip>
+#include <fstream>
 
 #include <ROOT/RVec.hxx>
 #include <TH1D.h>
@@ -12,11 +13,13 @@
 #include <TApplication.h>
 #include <TSystem.h>
 #include <TF2.h>
+#include <TLatex.h>
 
 #include <nlohmann/json.hpp>
 
 #include "./utils.h"
 #include "./return_TOF_position.h"
+#include "TString.h"
 #include "buffer.h"
 
 using std::vector;
@@ -37,6 +40,7 @@ int main(int argc, char** argv){
 
 	string arg = argv[1];
 	auto run_number = std::stoi(arg);
+	RUN_NUMBER = run_number;
 	TString filename = "WCTE_data/charged_particle/WCTE_offline_R" + arg + "S0_VME_matched.root";
 	auto file = TFile::Open(filename, "READ");
 	
@@ -45,9 +49,15 @@ int main(int argc, char** argv){
 		return -1;
 	}
 
+	std::ifstream config_file("/home/frantisek/scripts/config.json");
+	nlohmann::json config = nlohmann::json:: parse(config_file);
+	auto& run_config = config[std::to_string(run_number)];
+	BEAM_MOMENTUM = run_config.value("Beam momentum (MeV/c)", 0);
+	cout << "Config file loaded, beam momentum is " << BEAM_MOMENTUM << "MeV/c" << endl ;
+
+
 	auto tree = file->Get<TTree>("WCTEReadoutWindows");
 
-	nlohmann::json
 
 	vector<float>* arr_bm_times = nullptr;
 	vector<float>* arr_bm_charges = nullptr;
@@ -80,10 +90,16 @@ int main(int argc, char** argv){
 	TOF_reconstructor recon;
 	Histograms hists;
 	setup_histograms(hists, recon);
-	int n_pass_cut = 0; 
+	int n_pass_cut = 0;
+	int n_T5_valid_events = 0;
 	int n_events = tree->GetEntries();
 	int verb = 1000;
-	for(int i = 0; i < n_events; i++){
+	int n_events_with_multiple_valid_hits = 0;
+
+	vector<event_T5_detection> invalid_T5_hits;
+	vector<event_T5_detection> multivalidhits_events;
+
+	for(size_t i = 0; i < n_events; i++){
 		tree->GetEntry(i);
 		//Print progress
 
@@ -112,18 +128,36 @@ int main(int argc, char** argv){
 		auto T5_board_ids = pmt_ids[mask_T5_board];
 		auto T5_board_times = pmt_times[mask_T5_board];
 
-		auto positions = recon.Return_position(*arr_mpmt_ids, *arr_pmt_ids, *arr_pmt_times);
+		auto detections = recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids, *arr_pmt_times);
 
-		for (const auto& hit : positions){
-			if (!hit.valid_hit) continue;
-			hists.fill("positions", hit.position.first, hit.position.second);
+		if (recon.HasValidHits(detections.T5_hits)) n_T5_valid_events++;
+		// HasWeirdHits == 0 -- reconstruction outside the scintillator; == 1 -- multiple hits in event
+		if (recon.HasMultiValidHits(detections.T5_hits)){
+			n_events_with_multiple_valid_hits++;
+			multivalidhits_events.push_back(detections);
+		}
+		if (!recon.HasValidHits(detections.T5_hits)) invalid_T5_hits.push_back(detections);
+		int n_hits_in_T5_in_single_event = 0;
+		for (int i = 0; i < cut.Get_T5_ids().size(); i++){
+			auto T5_id = cut.Get_T5_ids().at(i);
+			int sum_hits_T5_i = VecOps::Sum(T5_board_ids == T5_id);
+			hists.fill(Form("T5_number_of_hits_%i", i), sum_hits_T5_i);
+			n_hits_in_T5_in_single_event += sum_hits_T5_i;
+		}
+		hists.fill("n_event_hits", n_hits_in_T5_in_single_event);	
+		
+		for (const auto& hit : detections.T5_hits){
+			if (!hit.valid_hit){
+				continue;
+			}
+			hists.fill("positions", hit.position->first, hit.position->second);
 		}
 
 	}
 	auto hist = hists.get_histogram_2D("positions");
 	TF2* gaus_2D = new TF2("gaus_2D", "bigaus", recon.Get_scint_xmin(3), recon.Get_scint_xmax(3), recon.Get_ymin(), recon.Get_ymax());
 	gaus_2D->SetParameters(130, 0, 40, 0, 40, 0);
-	hist->Fit(gaus_2D, "R");
+	hist->Fit(gaus_2D, "RQ");
 
 	gaus_2D = (TF2*)hist->GetFunction("gaus_2D");
 
@@ -156,6 +190,27 @@ int main(int argc, char** argv){
 	gaus_2D->SetLineWidth(2);
 	gaus_2D->SetLineStyle(1); // Solid lines
 
+	double sigma_x = gaus_2D->GetParameter(2);
+	double sigma_y = gaus_2D->GetParameter(4);
+
+	TString txt_sigma_x = Form("#sigma_{x} = %.2f mm", sigma_x);
+	TString txt_sigma_y = Form("#sigma_{y} = %.2f mm", sigma_y);
+
+	double offset = 10.0;
+	TLatex* ltx_sigX = new TLatex(sigma_x - offset, sigma_y, txt_sigma_x);
+	TLatex* ltx_sigY = new TLatex(sigma_x - offset, sigma_y - 5.0, txt_sigma_y);
+
+	ltx_sigX->SetTextSize(0.04); ltx_sigX->SetTextColor(kBlack);
+	ltx_sigY->SetTextSize(0.04); ltx_sigY->SetTextColor(kBlack);
+
+	TLatex* contour_sigma = new TLatex(sigma_x - offset, -sigma_y + offset, "1#sigma");
+	contour_sigma->SetTextSize(0.04); contour_sigma->SetTextColor(kBlack);
+
+	hist->GetListOfFunctions()->Add(ltx_sigX);
+	hist->GetListOfFunctions()->Add(ltx_sigY);
+	hist->GetListOfFunctions()->Add(contour_sigma);
+
+
 	for (int i = 0; i < 8; i++){
 		TString h_name = "positions_" + std::to_string(i); 
 		hists. hist_projectX("positions", h_name.Data(), i+1, i+1);
@@ -164,9 +219,49 @@ int main(int argc, char** argv){
 	TString plots_directory = "plots/Run_" + std::to_string(run_number);
 	gSystem->Exec("mkdir -p " + plots_directory);
 	gSystem->cd(plots_directory);
+	hists.print_exclusive("positions", 1000, 900);
 	hists.print_all();
+	hists.save_all("hists");
+
+	cout << "Printing out invalid hits: " << endl;
+	for (const auto& event : invalid_T5_hits){
+		cout << "Event " << event.event_nr << ":" << endl;
+		for(const auto& hit : event.T5_hits){
+			cout << "Scintillator ID: " << hit.scintillator_id.value() << "\t"
+			     << "Average time: " << hit.hit_time.value() << "\t"
+			     << "First SiPM time: " << hit.sipm_time_a.value() << "\t"
+			     << "Second SiPM time: " << hit.sipm_time_b.value() << "\t"
+			     << endl;
+		}	
+	}
+
+	cout << endl;
+	cout << "Printing out events with multiple valid hits: " << endl;
+	for (const auto& event : multivalidhits_events){
+		cout << "Event " << event.event_nr << ": " << endl;
+		for (const auto& hit : event.T5_hits){
+			cout << "Scintillator ID: " << hit.scintillator_id.value() << "\t"
+			     << "Average time: " << hit.hit_time.value() << "\t"
+			     << "First SiPM time: " << hit.sipm_time_a.value() << "\t"
+			     << "Second SiPM time: " << hit.sipm_time_b.value() << "\t"
+			     << "Valid hit?: " << hit.valid_hit << "\t"
+			     << endl;
+		}
+	}
 
 	cout << endl << n_pass_cut << " events out of " << n_events << " passed cuts" << endl;
+	cout << n_T5_valid_events << " events got a valid reconstruction -- "
+	     << n_pass_cut - n_T5_valid_events << " were reconstructed out of bounds?" << endl
+	     << n_events_with_multiple_valid_hits << " events had multiple valid hits" 
+	     << endl; 
+	cout << endl;
+
+	std::ofstream file_out;
+	file_out.open("Beam_profile_widths.dat", std::ofstream::app);
+	file_out << run_number << "\t"
+		<< BEAM_MOMENTUM << "\t"
+		<< sigma_x << "\t"
+		<< sigma_y << "\t" << endl;
 
 
 	//	app.Run();
