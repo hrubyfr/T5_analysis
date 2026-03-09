@@ -1,4 +1,8 @@
+# T5 detector analysis
+
 This is the code to analyze the T5 detector using the matched VME + BRB data files of the WCTE experiment.
+
+## How to run
 
 To run this code, compile it using the 
 ```
@@ -12,8 +16,9 @@ command
 
 The program can take additional arguments, `-o` will modify the name of the output root file and output path, `-i` will modify, where the program searches for the files
 
+## Output file data structure
+
 The root output file has the following structure:
-### T5 Detector Data Structure
 
 | Variable Name | Type | Description |
 | :--- | :---: | :--- |
