@@ -35,9 +35,10 @@ int main(int argc, char** argv){
 	int run_number = -1;
 	string input_path = "";
 	TString output_path = "output.root";
+	bool debug = false;
 
 	int opt;
-	while ((opt = getopt(argc, argv, "r:i:o:")) != -1) {
+	while ((opt = getopt(argc, argv, "r:i:o:d")) != -1) {
 		switch (opt) {
 			case 'r':
 				run_number = std::stoi(optarg);
@@ -48,8 +49,11 @@ int main(int argc, char** argv){
 			case 'o':
 				output_path = optarg;
 				break;
+			case 'd':
+				debug = true;
+				break;
 			default:
-				cerr << "Usage: " << argv[0] << " -r <run_number> [-i <input_file>] [-o <output_file>]" << endl;
+				cerr << "Usage: " << argv[0] << " -r <run_number> [-i <input_file>] [-o <output_file>] [-d]" << endl;
 				return -1;
 		}
 	}
@@ -112,6 +116,10 @@ int main(int argc, char** argv){
 	int n_pass_cut = 0;
 	int n_T5_valid_events = 0;
 	auto n_events = tree->GetEntries();
+	if (debug) {
+		cout << "Debug mode enabled: limiting to 5000 events" << endl;
+		n_events = std::min(n_events, 5000LL);
+	}
 	int verb = 1000;
 	int n_events_with_multiple_valid_hits = 0;
 	int n_events_with_valid_hits_in_expected_window = 0;
