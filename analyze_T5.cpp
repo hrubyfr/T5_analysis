@@ -62,8 +62,7 @@ int main(int argc, char **argv) {
     filename = "WCTE_data/charged_particle/WCTE_offline_R" +
                std::to_string(run_number) + "S0_VME_matched.root";
   } else {
-    filename = input_path + "/WCTE_offline_R" + std::to_string(run_number) +
-               "S0_VME_matched.root";
+    filename = input_path + "/WCTE_offline_R" + std::to_string(run_number) + "S0_VME_matched_processed_waveforms.root";
   }
   auto file = TFile::Open(filename, "READ");
 
@@ -72,14 +71,23 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  std::ifstream config_file("/home/frantisek/scripts/config.json");
+  std::ifstream config_file(
+      "/home/frantisek/Analysis/beam_profile_estimation/config.json");
   nlohmann::json config = nlohmann::json::parse(config_file);
   auto &run_config = config[std::to_string(run_number)];
   BEAM_MOMENTUM = run_config.value("Beam momentum (MeV/c)", 0);
   cout << "Config file loaded, beam momentum is " << BEAM_MOMENTUM << "MeV/c"
        << endl;
 
-  auto tree = file->Get<TTree>("WCTEReadoutWindows");
+  cout << "Loading Tree..." << endl;
+
+  auto tree = file->Get<TTree>("ProcessedWaveforms");
+
+  cout << "tree loaded, printing structure  ..." << endl;
+
+  tree->Print();
+
+  cout << "Finished printing tree structure, setting branch addresses ..." << endl;
 
   vector<float> *arr_bm_times = nullptr;
   vector<float> *arr_bm_charges = nullptr;
@@ -124,6 +132,8 @@ int main(int argc, char **argv) {
 
   vector<event_T5_detection> all_T5_hits;
 
+  cout << "Starting event loop over " << n_events << " events..." << endl;
+
   for (long long i = 0; i < n_events; i++) {
     tree->GetEntry(i);
     // Print progress
@@ -159,8 +169,14 @@ int main(int argc, char **argv) {
     detections =
         recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids, *arr_pmt_times);
 
-    if (detections.HasValidHit)
+    if (detections.HasValidHit) {
       n_T5_valid_events++;
+      for (const auto &hit : detections.T5_hits) {
+        if (!hit.is_valid_hit)
+          continue;
+        hists.fill("valid_hit_times", hit.hit_time);
+      }
+    }
     if (detections.HasMultipleValidHits) {
       n_events_with_multiple_valid_hits++;
       if (detections.HasInTimeWindow)
@@ -186,7 +202,9 @@ int main(int argc, char **argv) {
     hists.fill("n_event_hits", n_hits_in_T5_in_single_event);
 
     for (const auto &hit : detections.T5_hits) {
-      if (!hit.is_valid_hit || hit.quality != HitQuality::Perfect) {
+      if (!hit.is_valid_hit)
+      //|| hit.quality != HitQuality::Perfect)
+      {
         continue;
       }
       hists.fill("positions", hit.position_x, hit.position_y);
@@ -195,8 +213,8 @@ int main(int argc, char **argv) {
   }
   auto hist = hists.get_histogram_2D("positions");
   TF2 *gaus_2D =
-      new TF2("gaus_2D", "bigaus", recon.Get_scint_xmin(3),
-              recon.Get_scint_xmax(3), recon.Get_ymin(), recon.Get_ymax());
+      new TF2("gaus_2D", "bigaus", recon.Get_scint_xmin(3) * 2,
+              recon.Get_scint_xmax(3) * 2, recon.Get_ymin(), recon.Get_ymax());
   gaus_2D->SetParameters(130, 0, 40, 0, 40, 0);
   hist->Fit(gaus_2D, "R");
 
@@ -285,7 +303,7 @@ int main(int argc, char **argv) {
     TString h_name = "positions_" + std::to_string(i);
     hists.hist_projectX("positions", h_name.Data(), i + 1, i + 1);
     hists.get_histogram(h_name.Data())
-        ->Fit("gaus", "QR", "", recon.Get_scint_xmin(i),
+        ->Fit("gaus", "R", "", recon.Get_scint_xmin(i),
               recon.Get_scint_xmax(i));
   }
   TString plots_directory = "plots/Run_" + std::to_string(run_number);
@@ -325,7 +343,8 @@ int main(int argc, char **argv) {
   config[std::to_string(run_number)]["T5_beam_sigma_x"] = sig_x;
   config[std::to_string(run_number)]["T5_beam_sigma_y"] = sig_y;
 
-  std::ofstream config_file_out("/home/frantisek/scripts/config.json");
+  std::ofstream config_file_out(
+      "/home/frantisek/Analysis/beam_profile_estimation/config.json");
   if (config_file_out.is_open()) {
     // The '.dump(4)' method adds a 4-space indentation for pretty formatting
     config_file_out << config.dump(4) << std::endl;
