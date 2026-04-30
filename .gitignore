@@ -2,6 +2,7 @@ plots/
 WCTE_data
 
 
+/.*
 /*.jpg
 /*.png
 /*.o
