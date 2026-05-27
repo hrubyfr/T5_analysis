@@ -243,14 +243,15 @@ void Histograms::print_exclusive_log(const std::string &name, int c_size_x,
     TString c_name = "c_" + name;
     auto canvas = new TCanvas(c_name, c_name, c_size_x, c_size_y);
     canvas->SetRightMargin(0.16);
-    canvas->SetLogz();
     if (m_hists_map[name] != nullptr) {
         special_hists.push_back(name);
         if (m_hists_map[name]->InheritsFrom("TH2")) {
+            canvas->SetLogz();
             m_hists_map[name]->SetStats(0);
             m_hists_map[name]->Draw("COLZ");
             write_description();
         } else {
+            canvas->SetLogy();
             m_hists_map[name]->SetStats(1);
             m_hists_map[name]->Draw("");
             write_description();

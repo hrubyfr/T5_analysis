@@ -1,8 +1,14 @@
+#include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <fstream>
+#include <getopt.h>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <ostream>
+#include <stdexcept>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -22,7 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include "FitParameters.h"
-#include "Vc/common/simdarray.h"
+#include "RtypesCore.h"
 #include "buffer.h"
 #include "return_TOF_position.h"
 #include "utils.h"
@@ -35,196 +41,108 @@ using std::vector;
 
 using namespace ROOT;
 
-int main(int argc, char **argv) {
-
+struct run_config {
     int run_number = -1;
     string input_path = "";
-    TString output_path = "output.root";
+    TString output_path = "";
+    TString plots_directory = "";
 
-    int opt;
-    while ((opt = getopt(argc, argv, "r:i:o:")) != -1) {
-        switch (opt) {
-        case 'r':
-            run_number = std::stoi(optarg);
-            break;
-        case 'i':
-            input_path = optarg;
-            break;
-        case 'o':
-            output_path = optarg;
-            break;
-        default:
-            cerr << "Usage: " << argv[0]
-                 << " -r <run_number> [-i <input_path>] [-o <output_file>]"
-                 << endl;
-            return -1;
-        }
+    string config_file_path = "";
+    bool is_processed = false;
+    bool is_tagged_gamma = false;
+    bool is_minimum_bias = false;
+    bool is_charged_hadron = false;
+    bool is_self_trigger = false;
+    bool is_hardware_trigger = false;
+};
+
+struct Fit_results {
+    bool valid = false;
+    double mean_x;
+    double mean_y;
+    double mean_x_error;
+    double mean_y_error;
+    double sigma_x;
+    double sigma_y;
+    double sigma_x_error;
+    double sigma_y_error;
+    vector<int> SiPM_id;
+    vector<double> SiPM_means;
+    vector<double> SiPM_mean_errors;
+    vector<double> SiPM_sigmas;
+    vector<double> SiPM_sigma_errors;
+};
+
+TFile *open_file(run_config &run) {
+    TString base_path = run.input_path;
+    if (!base_path.EndsWith("/") && base_path.Length() > 0) {
+        base_path += "/";
     }
+    bool is_production =
+        (run.input_path.find("production_v1_0") != std::string::npos);
 
-    RUN_NUMBER = run_number;
-    TString filename;
-    if (input_path.empty()) {
-        filename = "WCTE_data/charged_particle/WCTE_offline_R" +
-                   std::to_string(run_number) + "S0_VME_matched.root";
+    TString file_name;
+    if (is_production) {
+        file_name = TString::Format(
+            "%s%d/processed_waveforms/"
+            "WCTE_offline_R%dS0_VME_matched_processed_waveforms.root",
+            base_path.Data(), run.run_number, run.run_number);
+        run.is_processed = true;
     } else {
-        filename = input_path + "WCTE_offline_R" + std::to_string(run_number) +
-                   "S0_VME_matched.root";
+        file_name = TString::Format("%sWCTE_offline_R%dS0_VME_matched.root",
+                                    base_path.Data(), run.run_number);
     }
-    auto file = TFile::Open(filename, "READ");
+    TFile *file = TFile::Open(file_name, "READ");
 
     if (!file || file->IsZombie()) {
-        cerr << "ERROR, file did not open" << endl;
-        return -1;
+        std::cerr << "ERROR: File " << file_name
+                  << " could not be opened or is corrupted: " << endl;
+        if (file) {
+            file->Close();
+        }
+        throw std::runtime_error(
+            Form("Could not open ROOT file: %s", file_name.Data()));
     }
+    return file;
+}
 
-    std::ifstream config_file(
-        "/home/frantisek/Analysis/beam_profile_estimation/config.json");
-    nlohmann::json config = nlohmann::json::parse(config_file);
-    auto &run_config = config[std::to_string(run_number)];
-    BEAM_MOMENTUM = run_config.value("Beam momentum (MeV/c)", 0);
-    cout << "Config file loaded, beam momentum is " << BEAM_MOMENTUM << "MeV/c"
+std::ofstream open_out_file(const run_config &run_directory) {
+
+    TString out_file_name = run_directory.plots_directory;
+    if (!out_file_name.EndsWith("/"))
+        out_file_name.Append("/");
+    gSystem->mkdir(out_file_name, true);
+    out_file_name.Append("output.csv");
+
+    cout << "Opening file " << out_file_name << " to output times to CSV"
          << endl;
-
-    cout << "Loading Tree..." << endl;
-
-    auto tree = file->Get<TTree>("WCTEReadoutWindows");
-
-    cout << "tree loaded, printing structure  ..." << endl;
-
-    tree->Print();
-
-    cout << "Finished printing tree structure, setting branch addresses ..."
-         << endl;
-
-    vector<float> *arr_bm_times = nullptr;
-    vector<float> *arr_bm_charges = nullptr;
-    vector<int> *arr_bm_time_ids = nullptr;
-    vector<int> *arr_bm_charge_ids = nullptr;
-
-    vector<double> *arr_pmt_times = nullptr;
-    vector<int> *arr_pmt_ids = nullptr;
-    vector<int> *arr_mpmt_ids = nullptr;
-
-    tree->SetBranchStatus("*", 0);
-    tree->SetBranchStatus("beamline_pmt_qdc_ids", 1);
-    tree->SetBranchStatus("beamline_pmt_tdc_ids", 1);
-    tree->SetBranchStatus("beamline_pmt_tdc_times", 1);
-    tree->SetBranchStatus("beamline_pmt_qdc_charges", 1);
-    tree->SetBranchStatus("hit_pmt_times", 1);
-    tree->SetBranchStatus("hit_mpmt_card_ids", 1);
-    tree->SetBranchStatus("hit_pmt_channel_ids", 1);
-
-    tree->SetBranchAddress("beamline_pmt_qdc_ids", &arr_bm_charge_ids);
-    tree->SetBranchAddress("beamline_pmt_tdc_ids", &arr_bm_time_ids);
-    tree->SetBranchAddress("beamline_pmt_tdc_times", &arr_bm_times);
-    tree->SetBranchAddress("beamline_pmt_qdc_charges", &arr_bm_charges);
-    tree->SetBranchAddress("hit_pmt_times", &arr_pmt_times);
-    tree->SetBranchAddress("hit_mpmt_card_ids", &arr_mpmt_ids);
-    tree->SetBranchAddress("hit_pmt_channel_ids", &arr_pmt_ids);
-
-    Cuts cut;
-    TOF_reconstructor recon;
-    Histograms hists;
-    setup_histograms(hists, recon);
-    int n_pass_cut = 0;
-    int n_T5_valid_events = 0;
-    auto n_events = tree->GetEntries();
-    int verb = 1000;
-    int n_events_with_multiple_valid_hits = 0;
-    int n_events_with_valid_hits_in_expected_window = 0;
-    int n_events_with_multiple_scint_hits = 0;
-    int n_events_with_multiple_valid_hits_had_one_in_expected_window = 0;
-    int n_invalid_hits = 0;
-    int n_events_out_of_bounds = 0;
-
-    int n_T5_scintillators = 8;
-
-    vector<event_T5_detection> all_T5_hits;
-    vector<int> n_hits_in_scints(n_T5_scintillators);
-    for (auto &hit : n_hits_in_scints) {
-        hit = 0;
+    std::ofstream file_out(out_file_name.Data());
+    if (!file_out.is_open()) {
+        cerr << "Error opening csv file" << endl;
+        throw std::runtime_error("Failed to open CSV file");
     }
-
-    cout << "Starting event loop over " << n_events << " events..." << endl;
-
-    for (long long i = 0; i < n_events; i++) {
-        tree->GetEntry(i);
-        // Print progress
-        event_T5_detection detections;
-
-        if (i % verb == 0)
-            cout << "\rAnalyzed " << i << " of " << n_events
-                 << std::setprecision(2) << std::fixed << " events ("
-                 << static_cast<float>(i) / n_events * 100 << " %)"
-                 << std::flush << endl;
-
-        RVecI bm_time_ids(arr_bm_time_ids->data(), arr_bm_time_ids->size());
-        RVecI bm_charge_ids(arr_bm_charge_ids->data(),
-                            arr_bm_charge_ids->size());
-        RVecF bm_times(arr_bm_times->data(), arr_bm_times->size());
-        RVecF bm_charges(arr_bm_charges->data(), arr_bm_charges->size());
-
-        RVecD pmt_times(arr_pmt_times->data(), arr_pmt_times->size());
-        RVecI pmt_ids(arr_pmt_ids->data(), arr_pmt_ids->size());
-        RVecI mpmt_ids(arr_mpmt_ids->data(), arr_mpmt_ids->size());
-
-        if (!cut.hit_T5(mpmt_ids, pmt_ids)) {
-            detections.event_nr = i;
-            all_T5_hits.push_back(detections);
-            continue;
-        }
-
-        n_pass_cut++;
-
-        auto mask_T5_board = (mpmt_ids == cut.get_T5_board());
-        auto T5_board_ids = pmt_ids[mask_T5_board];
-        auto T5_board_times = pmt_times[mask_T5_board];
-
-        detections = recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids,
-                                           *arr_pmt_times);
-
-        if (detections.HasValidHit) {
-            n_T5_valid_events++;
-            for (const auto &hit : detections.T5_hits) {
-                if (!hit.is_valid_hit)
-                    continue;
-                hists.fill("valid_hit_times", hit.hit_time);
-            }
-        }
-
-        if (detections.HasMultipleValidHits) {
-            n_events_with_multiple_valid_hits++;
-            if (detections.HasInTimeWindow)
-                n_events_with_multiple_valid_hits_had_one_in_expected_window++;
-            if (detections.HasMultipleScintillatorsHit)
-                n_events_with_multiple_scint_hits++;
-        }
-        if (detections.HasInTimeWindow)
-            n_events_with_valid_hits_in_expected_window++;
-        if (detections.HasHit && !detections.HasValidHit) {
-            n_invalid_hits++;
-        }
-        if (detections.HasOutOfBounds)
-            n_events_out_of_bounds++;
-
-        int n_hits_in_T5_in_single_event = 0;
-        for (size_t j = 0; j < cut.Get_T5_ids().size(); j++) {
-            auto T5_id = cut.Get_T5_ids().at(j);
-            int sum_hits_T5_i = VecOps::Sum(T5_board_ids == T5_id);
-            // hists.fill(Form("T5_number_of_hits_%i", j), sum_hits_T5_i);
-            n_hits_in_T5_in_single_event += sum_hits_T5_i;
-        }
-        hists.fill("n_event_hits", n_hits_in_T5_in_single_event);
-
-        for (const auto &hit : detections.T5_hits) {
-            if (!hit.is_valid_hit)
-                //|| hit.quality != HitQuality::Perfect)
-                continue;
-            hists.fill("positions", hit.position_x, hit.position_y);
-            n_hits_in_scints.at(hit.scintillator_id)++;
-        }
-        all_T5_hits.push_back(detections);
+    file_out << "RunNumber,HitTime,RawTime\n";
+    return file_out;
+}
+void save_1D_fit_result(const Fit_results &fit_results, TString filename) {
+    std::ofstream file_out_1D(filename.Data());
+    if (!file_out_1D.is_open()) {
+        throw std::runtime_error(
+            "ERROR: file for 1D fit results could not be opened");
     }
+    file_out_1D << "scint_id,mean,mean_error,sigma,sigma_error\n";
+    for (int i = 0; i < fit_results.SiPM_id.size(); i++) {
+        file_out_1D << fit_results.SiPM_id[i] << ","
+                    << fit_results.SiPM_means[i] << ","
+                    << fit_results.SiPM_mean_errors[i] << ","
+                    << fit_results.SiPM_sigmas[i] << ","
+                    << fit_results.SiPM_sigma_errors[i] << "\n";
+    }
+    file_out_1D.close();
+}
+
+void fit_positions_2D(Fit_results &fit_results, Histograms &hists,
+                      const TOF_reconstructor &recon) {
     auto hist = hists.get_histogram_2D("positions");
     TF2 *gaus_2D = new TF2("gaus_2D", "bigaus", recon.Get_scint_xmin(3) * 2,
                            recon.Get_scint_xmax(3) * 2, recon.Get_ymin(),
@@ -235,17 +153,29 @@ int main(int argc, char **argv) {
     gaus_2D = (TF2 *)hist->GetFunction("gaus_2D");
 
     double volume = gaus_2D->GetParameter(0);
-    double sig_x = gaus_2D->GetParameter(2);
-    double sig_y = gaus_2D->GetParameter(4);
     double rho = gaus_2D->GetParameter(5); // Correlation factor
 
-    double mean_x = gaus_2D->GetParameter(1);
-    double mean_y = gaus_2D->GetParameter(3);
+    auto mean_x = gaus_2D->GetParameter(1);
+    auto mean_y = gaus_2D->GetParameter(3);
+    auto mean_x_error = gaus_2D->GetParError(1);
+    auto mean_y_error = gaus_2D->GetParError(3);
+
+    double sig_x = gaus_2D->GetParameter(2);
+    double sig_y = gaus_2D->GetParameter(4);
+    auto sig_x_error = gaus_2D->GetParError(2);
+    auto sig_y_error = gaus_2D->GetParError(4);
+
+    fit_results.mean_x = mean_x;
+    fit_results.mean_y = mean_y;
+    fit_results.mean_x_error = mean_x_error;
+    fit_results.mean_y_error = mean_y_error;
 
     // errors
 
-    double sig_x_error = gaus_2D->GetParError(2);
-    double sig_y_error = gaus_2D->GetParError(4);
+    fit_results.sigma_x = sig_x;
+    fit_results.sigma_y = sig_y;
+    fit_results.sigma_x_error = sig_x_error;
+    fit_results.sigma_y_error = sig_y_error;
 
     double chi2 = gaus_2D->GetChisquare();
     int ndf = gaus_2D->GetNDF();
@@ -320,21 +250,383 @@ int main(int argc, char **argv) {
     hist->GetListOfFunctions()->Add(contour_sigma);
     hist->GetListOfFunctions()->Add(contour_sigma_2);
     hist->GetListOfFunctions()->Add(contour_sigma_3);
+}
 
+void fit_positions_1D(Fit_results &fit_results, Histograms &hists,
+                      TOF_reconstructor recon) {
     for (int i = 0; i < 8; i++) {
         TString h_name = "positions_" + std::to_string(i);
+        auto fit_fun = new TF1("gaussian", "gaus", 2 * recon.Get_scint_xmin(i),
+                               2 * recon.Get_scint_xmax(i));
         hists.hist_projectX("positions", h_name.Data(), i + 1, i + 1);
-        hists.get_histogram(h_name.Data())
-            ->Fit("gaus", "R", "", recon.Get_scint_xmin(i),
-                  recon.Get_scint_xmax(i));
+        hists.get_histogram(h_name.Data())->Fit(fit_fun, "R");
+        auto mean = fit_fun->GetParameter(1);
+        auto mean_error = fit_fun->GetParError(1);
+        auto sigma = fit_fun->GetParameter(2);
+        auto sigma_error = fit_fun->GetParError(2);
+        fit_results.SiPM_means.push_back(mean);
+        fit_results.SiPM_mean_errors.push_back(mean_error);
+        fit_results.SiPM_sigmas.push_back(sigma);
+        fit_results.SiPM_sigma_errors.push_back(sigma_error);
     }
-    TString plots_directory = "plots/Run_" + std::to_string(run_number);
-    gSystem->Exec("mkdir -p " + plots_directory);
-    gSystem->cd(plots_directory);
+}
+
+void analyze_tagged_gamma(TFile *file, run_config run_directory,
+                          Fit_results fit_results) {}
+
+void analyze_processed(TFile *file, run_config run_directory,
+                       Fit_results &fit_results) {
+
+    cout << "Loading Tree..." << endl;
+
+    auto tree = file->Get<TTree>("ProcessedWaveforms");
+
+    cout << "tree loaded, printing structure  ..." << endl;
+
+    tree->Print();
+
+    cout << "Finished printing tree structure, setting branch addresses ..."
+         << endl;
+
+    // vector<float> *arr_bm_times = nullptr;
+    // vector<float> *arr_bm_charges = nullptr;
+    // vector<int> *arr_bm_time_ids = nullptr;
+    // vector<int> *arr_bm_charge_ids = nullptr;
+    Int_t nhits;
+    const int MAX_HITS = 5000;
+    Double_t hit_time_carray[MAX_HITS];
+    Double_t hit_charge_carray[MAX_HITS];
+    Int_t hit_pmt_carray[MAX_HITS];
+    Int_t hit_card_carray[MAX_HITS];
+
+    vector<double> *arr_pmt_times = nullptr;
+    vector<double> *arr_pmt_charges = nullptr;
+    vector<int> *arr_pmt_ids = nullptr;
+    vector<int> *arr_mpmt_ids = nullptr;
+
+    // vector<vector<double>> *pmt_waveforms = nullptr;
+    // vector<double> *pmt_waveform_times = nullptr;
+    // vector<int> *pmt_waveform_card_ids = nullptr;
+    // vector<int> *pmt_waveform_pmt_ids = nullptr;
+
+    TString b_hit_times_name, b_hit_charges_name, b_hit_channel_name,
+        b_hit_card_name;
+    if (run_directory.is_processed) {
+        b_hit_times_name = "hit_time";
+        b_hit_charges_name = "hit_charge";
+        b_hit_channel_name = "hit_chan";
+        b_hit_card_name = "hit_card";
+    } else {
+        b_hit_times_name = "hit_pmt_times";
+        b_hit_charges_name = "hit_pmt_charges";
+        b_hit_channel_name = "hit_pmt_channel_ids";
+        b_hit_card_name = "hit_mpmt_card_ids";
+    }
+    TBranch *b_nhits = nullptr;
+
+    tree->SetBranchStatus("*", 0);
+    // tree->SetBranchStatus("beamline_pmt_qdc_ids", 1);
+    // tree->SetBranchStatus("beamline_pmt_tdc_ids", 1);
+    // tree->SetBranchStatus("beamline_pmt_tdc_times", 1);
+    // tree->SetBranchStatus("beamline_pmt_qdc_charges", 1);
+    tree->SetBranchStatus(b_hit_times_name, 1);
+    tree->SetBranchStatus(b_hit_channel_name, 1);
+    tree->SetBranchStatus(b_hit_charges_name, 1);
+    tree->SetBranchStatus(b_hit_card_name, 1);
+
+    if (run_directory.is_processed) {
+        tree->SetBranchStatus("nhit_time", 1);
+        tree->SetBranchAddress("nhit_time", &nhits, &b_nhits);
+    }
+    // tree->SetBranchStatus("pmt_waveforms", 1);
+    // tree->SetBranchStatus("pmt_waveform_times", 1);
+    // tree->SetBranchStatus("pmt_waveform_mpmt_card_ids", 1);
+    // tree->SetBranchStatus("pmt_waveform_pmt_channel_ids", 1);
+
+    // tree->SetBranchAddress("beamline_pmt_qdc_ids", &arr_bm_charge_ids);
+    // tree->SetBranchAddress("beamline_pmt_tdc_ids", &arr_bm_time_ids);
+    // tree->SetBranchAddress("beamline_pmt_tdc_times", &arr_bm_times);
+    // tree->SetBranchAddress("beamline_pmt_qdc_charges", &arr_bm_charges);
+
+    if (run_directory.is_processed) {
+
+        tree->SetBranchAddress(b_hit_times_name, &hit_time_carray);
+        tree->SetBranchAddress(b_hit_charges_name, &hit_charge_carray);
+        tree->SetBranchAddress(b_hit_card_name, &hit_card_carray);
+        tree->SetBranchAddress(b_hit_channel_name, &hit_pmt_carray);
+    } else {
+        tree->SetBranchAddress(b_hit_times_name, &arr_pmt_times);
+        tree->SetBranchAddress(b_hit_charges_name, &arr_pmt_charges);
+        tree->SetBranchAddress(b_hit_card_name, &arr_mpmt_ids);
+        tree->SetBranchAddress(b_hit_channel_name, &arr_pmt_ids);
+    }
+    // tree->SetBranchAddress("pmt_waveforms", &pmt_waveforms);
+    // tree->SetBranchAddress("pmt_waveform_times", &pmt_waveform_times);
+    // tree->SetBranchAddress("pmt_waveform_mpmt_card_ids",
+    //                        &pmt_waveform_card_ids);
+    // tree->SetBranchAddress("pmt_waveform_pmt_channel_ids",
+    //                        &pmt_waveform_pmt_ids);
+
+    Cuts cut;
+    TOF_reconstructor recon;
+    Histograms hists;
+    setup_histograms(hists, recon);
+    int n_pass_cut = 0;
+    int n_T5_valid_events = 0;
+    auto n_events = tree->GetEntries();
+    int verb = 1000;
+    int n_events_with_multiple_valid_hits = 0;
+    int n_events_with_valid_hits_in_expected_window = 0;
+    int n_events_with_multiple_scint_hits = 0;
+    int n_events_with_multiple_valid_hits_had_one_in_expected_window = 0;
+    int n_invalid_hits = 0;
+    int n_events_out_of_bounds = 0;
+
+    vector<int> hit_intervals;
+    for (int time_low = -65; time_low < 36; time_low += 10)
+        hit_intervals.push_back(time_low);
+
+    int n_T5_scintillators = 8;
+
+    vector<event_T5_detection> all_T5_hits;
+    vector<int> n_hits_in_scints(n_T5_scintillators);
+    for (auto &hit : n_hits_in_scints) {
+        hit = 0;
+    }
+    if (run_directory.is_processed) {
+
+        arr_pmt_times = new std::vector<double>();
+        arr_pmt_charges = new std::vector<double>();
+        arr_pmt_ids = new std::vector<int>();
+        arr_mpmt_ids = new std::vector<int>();
+    }
+
+    // Save SiPM times to a temporary CSV file, to be later parsed by a python
+    // script
+    auto file_out = open_out_file(run_directory);
+
+    cout << "Starting event loop over " << n_events << " events..." << endl;
+
+    for (long long i = 0; i < n_events; i++) {
+        if (run_directory.is_processed) {
+            auto entry = tree->LoadTree(i);
+            if (entry < 0)
+                break;
+            b_nhits->GetEntry(i);
+            if (nhits > MAX_HITS || nhits < 0) {
+                continue;
+            }
+            arr_pmt_times->assign(hit_time_carray, hit_time_carray + nhits);
+            arr_pmt_charges->assign(hit_charge_carray,
+                                    hit_charge_carray + nhits);
+            arr_pmt_ids->assign(hit_pmt_carray, hit_pmt_carray + nhits);
+            arr_mpmt_ids->assign(hit_card_carray, hit_card_carray + nhits);
+        }
+
+        tree->GetEntry(i);
+        // Print progress
+        event_T5_detection detections;
+
+        if (i % verb == 0)
+            cout << "\rAnalyzed " << i << " of " << n_events
+                 << std::setprecision(2) << std::fixed << " events ("
+                 << static_cast<float>(i) / n_events * 100 << " %)"
+                 << std::flush << endl;
+
+        // RVecI bm_time_ids(arr_bm_time_ids->data(), arr_bm_time_ids->size());
+        // RVecI bm_charge_ids(arr_bm_charge_ids->data(),
+        //                     arr_bm_charge_ids->size());
+        // RVecF bm_times(arr_bm_times->data(), arr_bm_times->size());
+        // RVecF bm_charges(arr_bm_charges->data(), arr_bm_charges->size());
+
+        RVecD pmt_times(arr_pmt_times->data(), arr_pmt_times->size());
+        RVecI pmt_ids(arr_pmt_ids->data(), arr_pmt_ids->size());
+        RVecI mpmt_ids(arr_mpmt_ids->data(), arr_mpmt_ids->size());
+
+        if (!cut.hit_T5(mpmt_ids, pmt_ids)) {
+            detections.event_nr = i;
+            all_T5_hits.push_back(detections);
+            continue;
+        }
+
+        n_pass_cut++;
+
+        auto mask_T5_board = (mpmt_ids == cut.get_T5_board());
+        auto T5_board_ids = pmt_ids[mask_T5_board];
+        auto T5_board_times = pmt_times[mask_T5_board];
+
+        // RVecI wf_mpmt_ids(pmt_waveform_card_ids->data(),
+        //                   pmt_waveform_card_ids->size());
+        // RVecI wf_pmt_ids(pmt_waveform_pmt_ids->data(),
+        //                  pmt_waveform_pmt_ids->size());
+        // RVecD wf_start_times(pmt_waveform_times->data(),
+        //                      pmt_waveform_times->size());
+        // RVec<std::vector<double>> wf_pmt_waveforms(pmt_waveforms->data(),
+        //                                            pmt_waveforms->size());
+        //
+        // auto wf_T5_card_positions = VecOps::Nonzero(wf_mpmt_ids == 132);
+        // auto wf_pmts_filtered = VecOps::Take(wf_pmt_ids,
+        // wf_T5_card_positions); wf_start_times = VecOps::Take(wf_start_times,
+        // wf_T5_card_positions); wf_pmt_waveforms =
+        // VecOps::Take(wf_pmt_waveforms, wf_T5_card_positions);
+        //
+        // auto lmbd_is_T5 = [wf_pmts_filtered, &cut]() {
+        //     RVecI mask(wf_pmts_filtered.size(), 0);
+        //     for (const auto &id : cut.Get_T5_ids()) {
+        //         mask = mask || (wf_pmts_filtered == id);
+        //     }
+        //     return mask;
+        // };
+        // auto t5_mask = lmbd_is_T5();
+        // wf_pmts_filtered = wf_pmts_filtered[t5_mask];
+        // wf_start_times = wf_start_times[t5_mask];
+        // wf_pmt_waveforms = wf_pmt_waveforms[t5_mask];
+        detections = recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids,
+                                           *arr_pmt_times, *arr_pmt_charges);
+
+        if (detections.HasValidHit) {
+            n_T5_valid_events++;
+            for (const auto &hit : detections.T5_hits) {
+                if (!hit.is_valid_hit)
+                    continue;
+                hists.fill("valid_hit_times", hit.hit_time);
+                hists.fill(Form("hit_raw_times_%i", hit.scintillator_id),
+                           hit.raw_time);
+                hists.fill("trigger_times", hit.trigger_time);
+                file_out << run_directory.run_number << "," << hit.hit_time
+                         << "," << hit.raw_time << "\n";
+            }
+        }
+        // cout << "Event " << i << ": " << detections.T5_hits.size() << " hits"
+        //      << endl;
+        // for (const auto &hit : detections.T5_hits) {
+        //     cout << "\tSiPM: " << hit.scintillator_id
+        //          << " Time: " << hit.hit_time << " X: " << hit.position_x
+        //          << " Y: " << hit.position_y;
+        //     if (hit.is_valid_hit)
+        //         cout << " Valid ";
+        //     cout << endl;
+        // }
+
+        if (detections.HasMultipleValidHits) {
+            n_events_with_multiple_valid_hits++;
+            if (detections.HasInTimeWindow)
+                n_events_with_multiple_valid_hits_had_one_in_expected_window++;
+            if (detections.HasMultipleScintillatorsHit)
+                n_events_with_multiple_scint_hits++;
+        }
+        if (detections.HasInTimeWindow)
+            n_events_with_valid_hits_in_expected_window++;
+        if (detections.HasHit && !detections.HasValidHit) {
+            n_invalid_hits++;
+        }
+        if (detections.HasOutOfBounds)
+            n_events_out_of_bounds++;
+
+        int n_hits_in_T5_in_single_event = 0;
+        for (size_t j = 0; j < cut.Get_T5_ids().size(); j++) {
+            auto T5_id = cut.Get_T5_ids().at(j);
+            int sum_hits_T5_i = VecOps::Sum(T5_board_ids == T5_id);
+            // hists.fill(Form("T5_number_of_hits_%i", j), sum_hits_T5_i);
+            n_hits_in_T5_in_single_event += sum_hits_T5_i;
+        }
+        hists.fill("n_event_hits", n_hits_in_T5_in_single_event);
+
+        for (const auto &hit : detections.T5_hits) {
+            bool is_in_time_window = true;
+
+            if (!hit.is_valid_hit)
+                //|| hit.quality != HitQuality::Perfect)
+                continue;
+            // if (hit.sipm_a_charge < 1000 || hit.sipm_b_charge < 1000)
+            //     continue;
+            hists.fill(Form("hit_charges_2D_%i", hit.scintillator_id),
+                       hit.sipm_a_charge, hit.sipm_b_charge);
+            hists.fill(Form("hit_charges_%i", hit.scintillator_id),
+                       hit.total_hit_charge);
+            hists.fill("positions", hit.position_x, hit.position_y);
+            n_hits_in_scints.at(hit.scintillator_id)++;
+        }
+
+        for (auto &hit : detections.T5_hits) {
+            auto sipm_a_Q_threshold = 1000;
+            auto sipm_b_Q_threshold = 1000;
+            if (hit.scintillator_id == 2)
+                sipm_b_Q_threshold = 400;
+            if (hit.sipm_a_charge < sipm_a_Q_threshold ||
+                hit.sipm_b_charge < sipm_b_Q_threshold || !hit.is_valid_hit)
+                continue;
+            hists.fill("positions_chargecut", hit.position_x, hit.position_y);
+        }
+
+        std::unordered_set<double> bad_timestamps;
+
+        for (auto &hit : detections.T5_hits) {
+
+            if (hit.sipm_time_a == hit.sipm_time_b) {
+                // cout << "Suspicious event! the detection times are exactly
+                // the "
+                //         "same!"
+                // << endl;
+                bad_timestamps.insert(hit.sipm_time_a);
+            }
+        }
+        if (!bad_timestamps.empty()) {
+            detections.T5_hits.erase(
+                std::remove_if(
+                    detections.T5_hits.begin(), detections.T5_hits.end(),
+                    [&bad_timestamps](const auto &hit) {
+                        bool has_bad_time_a =
+                            (bad_timestamps.count(hit.sipm_time_a) > 0);
+                        bool has_bad_time_b =
+                            (bad_timestamps.count(hit.sipm_time_b) > 0);
+                        return has_bad_time_a || has_bad_time_b;
+                    }),
+                detections.T5_hits.end());
+        }
+        for (const auto &hit : detections.T5_hits) {
+            if (!hit.is_valid_hit)
+                continue;
+            hists.fill("positions_timecut", hit.position_x, hit.position_y);
+
+            auto sipm_a_Q_threshold = 1000;
+            auto sipm_b_Q_threshold = 1000;
+            if (hit.scintillator_id == 2)
+                sipm_b_Q_threshold = 400;
+            if (hit.total_hit_charge < 1000)
+                continue;
+            hists.fill("positions_timechargecut", hit.position_x,
+                       hit.position_y);
+        }
+
+        all_T5_hits.push_back(detections);
+    }
+
+    fit_positions_2D(fit_results, hists, recon);
+
+    fit_positions_1D(fit_results, hists, recon);
+
+    TString fit_result_1D_filename = run_directory.plots_directory;
+    if (!fit_result_1D_filename.EndsWith("/"))
+        fit_result_1D_filename.Append("/");
+    fit_result_1D_filename.Append("fit_1D.csv");
+    save_1D_fit_result(fit_results, fit_result_1D_filename);
+
+    if (run_directory.plots_directory == "") {
+        run_directory.plots_directory =
+            "plots/Run_" + std::to_string(run_directory.run_number);
+    }
+
+    gSystem->Exec("mkdir -p " + run_directory.plots_directory);
+    gSystem->cd(run_directory.plots_directory);
     hists.print_exclusive("positions", 1000, 900);
     hists.print_all();
     hists.save_all("hists");
     hists.print_exclusive_log("positions", 1000, 900);
+    hists.print_exclusive_log("valid_hit_times", 1800, 900);
+    hists.print_exclusive("positions_chargecut", 1000, 900);
+    hists.print_exclusive("positions_timecut", 1000, 900);
+    hists.print_exclusive("positions_timechargecut", 1000, 900);
 
     cout << endl
          << n_pass_cut << " events out of " << n_events << " passed cuts"
@@ -362,6 +654,441 @@ int main(int argc, char **argv) {
         << endl
         << endl;
     cout << endl;
+    gSystem->cd("/eos/user/f/fhruby/projects/T5_analysis/");
+}
+
+void analyze_raw(TFile *file, run_config run_directory,
+                 Fit_results &fit_results) {
+
+    cout << "Loading Tree..." << endl;
+
+    auto tree = file->Get<TTree>("WCTEReadoutWindows");
+
+    cout << "tree loaded, printing structure  ..." << endl;
+
+    tree->Print();
+
+    cout << "Finished printing tree structure, setting branch addresses ..."
+         << endl;
+
+    // vector<float> *arr_bm_times = nullptr;
+    // vector<float> *arr_bm_charges = nullptr;
+    // vector<int> *arr_bm_time_ids = nullptr;
+    // vector<int> *arr_bm_charge_ids = nullptr;
+
+    vector<double> *arr_pmt_times = nullptr;
+    vector<double> *arr_pmt_charges = nullptr;
+    vector<int> *arr_pmt_ids = nullptr;
+    vector<int> *arr_mpmt_ids = nullptr;
+
+    // vector<vector<double>> *pmt_waveforms = nullptr;
+    // vector<double> *pmt_waveform_times = nullptr;
+    // vector<int> *pmt_waveform_card_ids = nullptr;
+    // vector<int> *pmt_waveform_pmt_ids = nullptr;
+
+    tree->SetBranchStatus("*", 0);
+    // tree->SetBranchStatus("beamline_pmt_qdc_ids", 1);
+    // tree->SetBranchStatus("beamline_pmt_tdc_ids", 1);
+    // tree->SetBranchStatus("beamline_pmt_tdc_times", 1);
+    // tree->SetBranchStatus("beamline_pmt_qdc_charges", 1);
+    tree->SetBranchStatus("hit_pmt_times", 1);
+    tree->SetBranchStatus("hit_pmt_charges", 1);
+    tree->SetBranchStatus("hit_mpmt_card_ids", 1);
+    tree->SetBranchStatus("hit_pmt_channel_ids", 1);
+
+    // tree->SetBranchStatus("pmt_waveforms", 1);
+    // tree->SetBranchStatus("pmt_waveform_times", 1);
+    // tree->SetBranchStatus("pmt_waveform_mpmt_card_ids", 1);
+    // tree->SetBranchStatus("pmt_waveform_pmt_channel_ids", 1);
+
+    // tree->SetBranchAddress("beamline_pmt_qdc_ids", &arr_bm_charge_ids);
+    // tree->SetBranchAddress("beamline_pmt_tdc_ids", &arr_bm_time_ids);
+    // tree->SetBranchAddress("beamline_pmt_tdc_times", &arr_bm_times);
+    // tree->SetBranchAddress("beamline_pmt_qdc_charges", &arr_bm_charges);
+    tree->SetBranchAddress("hit_pmt_times", &arr_pmt_times);
+    tree->SetBranchAddress("hit_pmt_charges", &arr_pmt_charges);
+    tree->SetBranchAddress("hit_mpmt_card_ids", &arr_mpmt_ids);
+    tree->SetBranchAddress("hit_pmt_channel_ids", &arr_pmt_ids);
+
+    // tree->SetBranchAddress("pmt_waveforms", &pmt_waveforms);
+    // tree->SetBranchAddress("pmt_waveform_times", &pmt_waveform_times);
+    // tree->SetBranchAddress("pmt_waveform_mpmt_card_ids",
+    //                        &pmt_waveform_card_ids);
+    // tree->SetBranchAddress("pmt_waveform_pmt_channel_ids",
+    //                        &pmt_waveform_pmt_ids);
+
+    Cuts cut;
+    TOF_reconstructor recon;
+    Histograms hists;
+    setup_histograms(hists, recon);
+    int n_pass_cut = 0;
+    int n_T5_valid_events = 0;
+    auto n_events = tree->GetEntries();
+    int verb = 1000;
+    int n_events_with_multiple_valid_hits = 0;
+    int n_events_with_valid_hits_in_expected_window = 0;
+    int n_events_with_multiple_scint_hits = 0;
+    int n_events_with_multiple_valid_hits_had_one_in_expected_window = 0;
+    int n_invalid_hits = 0;
+    int n_events_out_of_bounds = 0;
+
+    vector<int> hit_intervals;
+    for (int time_low = -65; time_low < 36; time_low += 10)
+        hit_intervals.push_back(time_low);
+
+    int n_T5_scintillators = 8;
+
+    vector<event_T5_detection> all_T5_hits;
+    vector<int> n_hits_in_scints(n_T5_scintillators);
+    for (auto &hit : n_hits_in_scints) {
+        hit = 0;
+    }
+
+    auto file_out = open_out_file(run_directory);
+
+    cout << "Starting event loop over " << n_events << " events..." << endl;
+
+    for (long long i = 0; i < n_events; i++) {
+        tree->GetEntry(i);
+        // Print progress
+        event_T5_detection detections;
+
+        if (i % verb == 0)
+            cout << "\rAnalyzed " << i << " of " << n_events
+                 << std::setprecision(2) << std::fixed << " events ("
+                 << static_cast<float>(i) / n_events * 100 << " %)"
+                 << std::flush << endl;
+
+        // RVecI bm_time_ids(arr_bm_time_ids->data(), arr_bm_time_ids->size());
+        // RVecI bm_charge_ids(arr_bm_charge_ids->data(),
+        //                     arr_bm_charge_ids->size());
+        // RVecF bm_times(arr_bm_times->data(), arr_bm_times->size());
+        // RVecF bm_charges(arr_bm_charges->data(), arr_bm_charges->size());
+
+        RVecD pmt_times(arr_pmt_times->data(), arr_pmt_times->size());
+        RVecI pmt_ids(arr_pmt_ids->data(), arr_pmt_ids->size());
+        RVecI mpmt_ids(arr_mpmt_ids->data(), arr_mpmt_ids->size());
+
+        if (!cut.hit_T5(mpmt_ids, pmt_ids)) {
+            detections.event_nr = i;
+            all_T5_hits.push_back(detections);
+            continue;
+        }
+
+        n_pass_cut++;
+
+        auto mask_T5_board = (mpmt_ids == cut.get_T5_board());
+        auto T5_board_ids = pmt_ids[mask_T5_board];
+        auto T5_board_times = pmt_times[mask_T5_board];
+
+        // RVecI wf_mpmt_ids(pmt_waveform_card_ids->data(),
+        //                   pmt_waveform_card_ids->size());
+        // RVecI wf_pmt_ids(pmt_waveform_pmt_ids->data(),
+        //                  pmt_waveform_pmt_ids->size());
+        // RVecD wf_start_times(pmt_waveform_times->data(),
+        //                      pmt_waveform_times->size());
+        // RVec<std::vector<double>> wf_pmt_waveforms(pmt_waveforms->data(),
+        //                                            pmt_waveforms->size());
+        //
+        // auto wf_T5_card_positions = VecOps::Nonzero(wf_mpmt_ids == 132);
+        // auto wf_pmts_filtered = VecOps::Take(wf_pmt_ids,
+        // wf_T5_card_positions); wf_start_times = VecOps::Take(wf_start_times,
+        // wf_T5_card_positions); wf_pmt_waveforms =
+        // VecOps::Take(wf_pmt_waveforms, wf_T5_card_positions);
+        //
+        // auto lmbd_is_T5 = [wf_pmts_filtered, &cut]() {
+        //     RVecI mask(wf_pmts_filtered.size(), 0);
+        //     for (const auto &id : cut.Get_T5_ids()) {
+        //         mask = mask || (wf_pmts_filtered == id);
+        //     }
+        //     return mask;
+        // };
+        // auto t5_mask = lmbd_is_T5();
+        // wf_pmts_filtered = wf_pmts_filtered[t5_mask];
+        // wf_start_times = wf_start_times[t5_mask];
+        // wf_pmt_waveforms = wf_pmt_waveforms[t5_mask];
+        detections = recon.Return_position(i, *arr_mpmt_ids, *arr_pmt_ids,
+                                           *arr_pmt_times, *arr_pmt_charges);
+
+        if (detections.HasValidHit) {
+            n_T5_valid_events++;
+            for (const auto &hit : detections.T5_hits) {
+                if (!hit.is_valid_hit)
+                    continue;
+                hists.fill("valid_hit_times", hit.hit_time);
+                hists.fill(Form("hit_raw_times_%i", hit.scintillator_id),
+                           hit.raw_time);
+                hists.fill("trigger_times", hit.trigger_time);
+                file_out << run_directory.run_number << "," << hit.hit_time
+                         << "," << hit.raw_time << "\n";
+            }
+        }
+        // cout << "Event " << i << ": " << detections.T5_hits.size() << " hits"
+        //      << endl;
+        // for (const auto &hit : detections.T5_hits) {
+        //     cout << "\tSiPM: " << hit.scintillator_id
+        //          << " Time: " << hit.hit_time << " X: " << hit.position_x
+        //          << " Y: " << hit.position_y;
+        //     if (hit.is_valid_hit)
+        //         cout << " Valid ";
+        //     cout << endl;
+        // }
+
+        if (detections.HasMultipleValidHits) {
+            n_events_with_multiple_valid_hits++;
+            if (detections.HasInTimeWindow)
+                n_events_with_multiple_valid_hits_had_one_in_expected_window++;
+            if (detections.HasMultipleScintillatorsHit)
+                n_events_with_multiple_scint_hits++;
+        }
+        if (detections.HasInTimeWindow)
+            n_events_with_valid_hits_in_expected_window++;
+        if (detections.HasHit && !detections.HasValidHit) {
+            n_invalid_hits++;
+        }
+        if (detections.HasOutOfBounds)
+            n_events_out_of_bounds++;
+
+        int n_hits_in_T5_in_single_event = 0;
+        for (size_t j = 0; j < cut.Get_T5_ids().size(); j++) {
+            auto T5_id = cut.Get_T5_ids().at(j);
+            int sum_hits_T5_i = VecOps::Sum(T5_board_ids == T5_id);
+            // hists.fill(Form("T5_number_of_hits_%i", j), sum_hits_T5_i);
+            n_hits_in_T5_in_single_event += sum_hits_T5_i;
+        }
+        hists.fill("n_event_hits", n_hits_in_T5_in_single_event);
+
+        for (const auto &hit : detections.T5_hits) {
+            bool diff_trigger = false;
+            if (run_directory.run_number > 2067 &&
+                run_directory.run_number < 2220) {
+                diff_trigger = true;
+            }
+            bool is_in_time_window = true;
+            if (diff_trigger) {
+                double MAX_TIME = 20;
+                double MIN_TIME = -10;
+                is_in_time_window =
+                    (hit.hit_time > MIN_TIME && hit.hit_time < MAX_TIME);
+            }
+
+            if (!hit.is_valid_hit)
+                //|| hit.quality != HitQuality::Perfect)
+                continue;
+            // if (hit.sipm_a_charge < 1000 || hit.sipm_b_charge < 1000)
+            //     continue;
+            hists.fill(Form("hit_charges_2D_%i", hit.scintillator_id),
+                       hit.sipm_a_charge, hit.sipm_b_charge);
+            hists.fill(Form("hit_charges_%i", hit.scintillator_id),
+                       hit.total_hit_charge);
+            hists.fill("positions", hit.position_x, hit.position_y);
+            n_hits_in_scints.at(hit.scintillator_id)++;
+        }
+
+        for (auto &hit : detections.T5_hits) {
+            auto sipm_a_Q_threshold = 1000;
+            auto sipm_b_Q_threshold = 1000;
+            if (hit.scintillator_id == 2)
+                sipm_b_Q_threshold = 400;
+            if (hit.sipm_a_charge < sipm_a_Q_threshold ||
+                hit.sipm_b_charge < sipm_b_Q_threshold || !hit.is_valid_hit)
+                continue;
+            hists.fill("positions_chargecut", hit.position_x, hit.position_y);
+        }
+
+        std::unordered_set<double> bad_timestamps;
+
+        for (auto &hit : detections.T5_hits) {
+
+            if (hit.sipm_time_a == hit.sipm_time_b) {
+                // cout << "Suspicious event! the detection times are exactly
+                // the "
+                //         "same!"
+                // << endl;
+                bad_timestamps.insert(hit.sipm_time_a);
+            }
+        }
+        if (!bad_timestamps.empty()) {
+            detections.T5_hits.erase(
+                std::remove_if(
+                    detections.T5_hits.begin(), detections.T5_hits.end(),
+                    [&bad_timestamps](const auto &hit) {
+                        bool has_bad_time_a =
+                            (bad_timestamps.count(hit.sipm_time_a) > 0);
+                        bool has_bad_time_b =
+                            (bad_timestamps.count(hit.sipm_time_b) > 0);
+                        return has_bad_time_a || has_bad_time_b;
+                    }),
+                detections.T5_hits.end());
+        }
+        for (const auto &hit : detections.T5_hits) {
+            if (!hit.is_valid_hit)
+                continue;
+            hists.fill("positions_timecut", hit.position_x, hit.position_y);
+
+            auto sipm_a_Q_threshold = 1000;
+            auto sipm_b_Q_threshold = 1000;
+            if (hit.scintillator_id == 2)
+                sipm_b_Q_threshold = 400;
+            if (hit.total_hit_charge < 1000)
+                continue;
+            hists.fill("positions_timechargecut", hit.position_x,
+                       hit.position_y);
+        }
+
+        all_T5_hits.push_back(detections);
+    }
+    fit_positions_2D(fit_results, hists, recon);
+    fit_positions_1D(fit_results, hists, recon);
+
+    TString fit_result_1D_filename = run_directory.plots_directory;
+    if (!fit_result_1D_filename.EndsWith("/"))
+        fit_result_1D_filename.Append("/");
+    fit_result_1D_filename.Append("fit_1D.csv");
+    save_1D_fit_result(fit_results, fit_result_1D_filename);
+
+    if (run_directory.plots_directory == "") {
+        run_directory.plots_directory =
+            "plots/Run_" + std::to_string(run_directory.run_number);
+    }
+
+    gSystem->Exec("mkdir -p " + run_directory.plots_directory);
+    gSystem->cd(run_directory.plots_directory);
+    hists.print_exclusive("positions", 1000, 900);
+    hists.print_all();
+    hists.save_all("hists");
+    hists.print_exclusive_log("positions", 1000, 900);
+    hists.print_exclusive_log("valid_hit_times", 1800, 900);
+    hists.print_exclusive("positions_chargecut", 1000, 900);
+    hists.print_exclusive("positions_timecut", 1000, 900);
+    hists.print_exclusive("positions_timechargecut", 1000, 900);
+
+    cout << endl
+         << n_pass_cut << " events out of " << n_events << " passed cuts"
+         << endl;
+    cout
+        << n_T5_valid_events << " events got a valid reconstruction -- "
+        << n_pass_cut - n_T5_valid_events << " were mismatched events?" << endl
+        << n_invalid_hits
+        << " events were invalid -- mismatched events (the only paired SiPM "
+           "hits were at totally different times)"
+        << endl
+        << n_events_with_valid_hits_in_expected_window
+        << " events of them had a hit in the expected time window" << endl
+        << n_events_out_of_bounds
+        << " events had a reconstruction out of bounds" << endl
+        << endl
+
+        << n_events_with_multiple_valid_hits
+        << " events had multiple valid hits -- "
+        << n_events_with_multiple_valid_hits_had_one_in_expected_window
+        << " of those had at least one hit in the expected time window" << endl
+        << n_events_with_multiple_scint_hits
+        << " events had hits in multiple scintillators -- in the expected time "
+           "window"
+        << endl
+        << endl;
+    cout << endl;
+    gSystem->cd("/eos/user/f/fhruby/projects/T5_analysis/");
+}
+
+int main(int argc, char **argv) {
+
+    run_config run_directory;
+
+    int opt;
+    while ((opt = getopt(argc, argv, "r:i:o:p:c:")) != -1) {
+        switch (opt) {
+        case 'r':
+            run_directory.run_number = std::stoi(optarg);
+            break;
+        case 'i':
+            run_directory.input_path = optarg;
+            break;
+        case 'o':
+            run_directory.output_path = optarg;
+            break;
+        case 'p':
+            run_directory.plots_directory = optarg;
+            break;
+        case 'c':
+            run_directory.config_file_path = optarg;
+            break;
+        default:
+            cerr << "Usage: " << argv[0]
+                 << " -r <run_number> [-i <input_path>] [-o <output_file>]"
+                 << endl;
+            return -1;
+        }
+    }
+
+    RUN_NUMBER = run_directory.run_number;
+
+    if (run_directory.config_file_path == "") {
+        string config_file_path = "../configs/LEMB_runs.json";
+    }
+    cout << "Opening a config file " << run_directory.config_file_path << endl;
+    std::ifstream config_file(run_directory.config_file_path);
+    if (!config_file || !config_file.is_open()) {
+        cerr << "ERROR: could not open config file" << endl;
+        return 1;
+    }
+
+    nlohmann::json config;
+    config_file >> config;
+
+    cout << "Loading run configuration from json...";
+    nlohmann::json *run_config;
+    for (auto &run : config) {
+        if (run["run_number"] == "")
+            continue;
+        cout << "Run " << run["run_number"] << "...";
+        string run_nr_str = run["run_number"];
+
+        if (std::stoi(run_nr_str) == run_directory.run_number) {
+            run_config = &run;
+            string run_momentum_str = run.value("beam_momentum", "0");
+            string run_configuration = run.value("run_config", "");
+            string beam_config = run.value("beam_config", "");
+            string trigger_config = run.value("trigger_config", "");
+            if (run_configuration.find("mpmt_beam") != std::string::npos)
+                run_directory.is_self_trigger = true;
+            else if (run_configuration.find("hardware_trigger") !=
+                     std::string::npos)
+                run_directory.is_hardware_trigger = true;
+            if (beam_config.find("hadron") != std::string::npos)
+                run_directory.is_charged_hadron = true;
+            else if (beam_config.find("tagged gamma") != std::string::npos)
+                run_directory.is_tagged_gamma = true;
+            if (trigger_config.find("LEMB") != std::string::npos)
+                run_directory.is_minimum_bias = true;
+            BEAM_MOMENTUM = std::stoi(run_momentum_str);
+            break;
+        }
+    }
+    cout << "Found\t Done, closing config file" << endl;
+    config_file.close();
+    cout << "Config file loaded, beam momentum is " << BEAM_MOMENTUM << "MeV/c"
+         << endl;
+
+    TFile *file;
+    Fit_results fit_results;
+
+    if (run_directory.is_self_trigger) {
+        cout << "Run was diagnosed as self-trigger, running self trigger "
+                "analysis"
+             << endl;
+        run_directory.input_path = "/eos/experiment/wcte/data/"
+                                   "2025_commissioning/offline_data_vme_match/";
+
+        file = open_file(run_directory);
+        analyze_raw(file, run_directory, fit_results);
+    } else if (run_directory.is_hardware_trigger) {
+        cout << "Run was diagnosed as hardware_trigger, running processed "
+                "analysis"
+             << endl;
+        analyze_processed(file, run_directory, fit_results);
+    }
 
     file->Close();
 
@@ -370,70 +1097,79 @@ int main(int argc, char **argv) {
 
     // Load fit values from T5 model fit, extract SiPM resolutions
 
-    cout << " Calculating correction to x beam width: " << endl;
-
-    cout << " Loading resolutions from a file" << endl;
-    FitParameters T5_parameters;
-    cout << " Loaded effective speed, it is " << T5_parameters.Get_veff()
-         << " cm/ns" << endl;
-    auto resolutions = T5_parameters.GetResolutions();
-    cout << "Done, " << resolutions.size()
-         << " resolutions extracted, they are: " << endl;
-    for (const auto &res : resolutions) {
-        cout << "SiPM " << res.sipm_nr << ": " << res.width_cm << " cm ("
-             << res.time_ns << " ns)" << endl;
-    }
-    cout << "Accumulating the total number of events" << endl;
-    auto total_events =
-        std::accumulate(n_hits_in_scints.begin(), n_hits_in_scints.end(), 0);
-    cout << " Done, the total number of events is " << total_events << endl;
-    cout << "Calculating the variance of effective sigma..." << endl;
-    double effective_sigma_sipms_mm_square = 0;
-    for (int i = 0; i < n_T5_scintillators; i++) {
-        auto weight =
-            static_cast<double>(n_hits_in_scints.at(i)) / total_events;
-        effective_sigma_sipms_mm_square +=
-            weight * pow(resolutions.at(i).width_cm * 10, 2);
-    }
-    auto effective_sigma_sipms_mm = sqrt(effective_sigma_sipms_mm_square);
-    cout << "Done, it is " << effective_sigma_sipms_mm_square << endl;
-
-    double variance_error_square = 0;
-    for (int i = 0; i < n_T5_scintillators; i++) {
-        double r_i_sq = pow(resolutions.at(i).width_cm, 2);
-        double n_hits = static_cast<double>(n_hits_in_scints.at(i));
-
-        // Propagate the Poisson error of the hits (delta N_i = sqrt(N_i))
-        variance_error_square +=
-            n_hits *
-            pow((r_i_sq - effective_sigma_sipms_mm_square) / total_events, 2);
-    }
-    auto delta_V = sqrt(variance_error_square);
-
-    auto sig_x_corr = sqrt(pow(sig_x, 2) - effective_sigma_sipms_mm_square);
-    auto sig_x_corr_error = delta_V / (2.0 * effective_sigma_sipms_mm);
+    // cout << " Calculating correction to x beam width: " << endl;
+    //
+    // cout << " Loading resolutions from a file" << endl;
+    // FitParameters T5_parameters;
+    // cout << " Loaded effective speed, it is " << T5_parameters.Get_veff()
+    //      << " cm/ns" << endl;
+    // auto resolutions = T5_parameters.GetResolutions();
+    // cout << "Done, " << resolutions.size()
+    //      << " resolutions extracted, they are: " << endl;
+    // for (const auto &res : resolutions) {
+    //   cout << "SiPM " << res.sipm_nr << ": " << res.width_cm << " cm ("
+    //        << res.time_ns << " ns)" << endl;
+    // }
+    // cout << "Accumulating the total number of events" << endl;
+    // auto total_events =
+    //     std::accumulate(n_hits_in_scints.begin(), n_hits_in_scints.end(), 0);
+    // cout << " Done, the total number of events is " << total_events << endl;
+    // cout << "Calculating the variance of effective sigma..." << endl;
+    // double effective_sigma_sipms_mm_square = 0;
+    // for (int i = 0; i < n_T5_scintillators; i++) {
+    //   auto weight = static_cast<double>(n_hits_in_scints.at(i)) /
+    //   total_events; effective_sigma_sipms_mm_square +=
+    //       weight * pow(resolutions.at(i).width_cm * 10, 2);
+    // }
+    // auto effective_sigma_sipms_mm = sqrt(effective_sigma_sipms_mm_square);
+    // cout << "Done, it is " << effective_sigma_sipms_mm_square << endl;
+    //
+    // double variance_error_square = 0;
+    // for (int i = 0; i < n_T5_scintillators; i++) {
+    //   double r_i_sq = pow(resolutions.at(i).width_cm, 2);
+    //   double n_hits = static_cast<double>(n_hits_in_scints.at(i));
+    //
+    //   // Propagate the Poisson error of the hits (delta N_i = sqrt(N_i))
+    //   variance_error_square +=
+    //       n_hits *
+    //       pow((r_i_sq - effective_sigma_sipms_mm_square) / total_events, 2);
+    // }
+    // auto delta_V = sqrt(variance_error_square);
+    //
+    // auto sig_x_corr = sqrt(pow(sig_x, 2) - effective_sigma_sipms_mm_square);
+    // auto sig_x_corr_error = delta_V / (2.0 * effective_sigma_sipms_mm);
     // pow(effective_sigma_sipms * ))
 
-    config[std::to_string(run_number)]["T5_beam_sigma_x"] = sig_x;
-    config[std::to_string(run_number)]["T5_beam_sigma_y"] = sig_y;
-    config[std::to_string(run_number)]["T5_beam_sigma_x_error"] = sig_x_error;
-    config[std::to_string(run_number)]["T5_beam_sigma_y_error"] = sig_y_error;
-    config[std::to_string(run_number)]["T5_beam_sigma_x_corrected"] =
-        sig_x_corr;
-    config[std::to_string(run_number)]["T5_beam_sigma_x_corrected_error"] =
-        sig_x_corr_error;
+    (*run_config)["T5_beam_sigma_x"] = fit_results.sigma_x;
+    (*run_config)["T5_beam_sigma_y"] = fit_results.sigma_y;
+    (*run_config)["T5_beam_sigma_x_error"] = fit_results.sigma_x_error;
+    (*run_config)["T5_beam_sigma_y_error"] = fit_results.sigma_y_error;
+    (*run_config)["T5_beam_mean_x"] = fit_results.mean_x;
+    (*run_config)["T5_beam_mean_y"] = fit_results.mean_y;
+    (*run_config)["T5_beam_mean_x_error"] = fit_results.mean_x_error;
+    (*run_config)["T5_beam_mean_y_error"] = fit_results.mean_y_error;
 
-    std::ofstream config_file_out(
-        "/home/frantisek/Analysis/beam_profile_estimation/config.json");
+    string sigmas_output;
+    if (run_directory.output_path == "") {
+        sigmas_output = "config_out.json";
+    } else {
+        sigmas_output = run_directory.output_path;
+    }
+
+    cout << "Opening output file: " << sigmas_output
+         << " to dump fit results in" << endl;
+    std::ofstream config_file_out(sigmas_output);
     if (config_file_out.is_open()) {
         // The '.dump(4)' method adds a 4-space indentation for pretty
         // formatting
         config_file_out << config.dump(4) << std::endl;
         config_file_out.close();
-        cout << "Successfully updated config.json with sigma_x (" << sig_x
-             << ") and sigma_y (" << sig_y << ")." << endl;
+        cout << "Successfully updated config.json with sigma_x ("
+             << fit_results.sigma_x << ") and sigma_y (" << fit_results.sigma_y
+             << ")." << endl;
     } else {
         cerr << "ERROR: Could not open config.json for writing!" << endl;
+        cerr << "System_error: " << std::strerror(errno) << endl;
     }
 
     // TFile* output_file = TFile::Open(output_path, "RECREATE");
