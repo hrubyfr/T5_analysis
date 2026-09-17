@@ -1140,37 +1140,38 @@ int main(int argc, char **argv) {
     // auto sig_x_corr_error = delta_V / (2.0 * effective_sigma_sipms_mm);
     // pow(effective_sigma_sipms * ))
 
-    (*run_config)["T5_beam_sigma_x"] = fit_results.sigma_x;
-    (*run_config)["T5_beam_sigma_y"] = fit_results.sigma_y;
-    (*run_config)["T5_beam_sigma_x_error"] = fit_results.sigma_x_error;
-    (*run_config)["T5_beam_sigma_y_error"] = fit_results.sigma_y_error;
-    (*run_config)["T5_beam_mean_x"] = fit_results.mean_x;
-    (*run_config)["T5_beam_mean_y"] = fit_results.mean_y;
-    (*run_config)["T5_beam_mean_x_error"] = fit_results.mean_x_error;
-    (*run_config)["T5_beam_mean_y_error"] = fit_results.mean_y_error;
+    // (*run_config)["T5_beam_sigma_x"] = fit_results.sigma_x;
+    // (*run_config)["T5_beam_sigma_y"] = fit_results.sigma_y;
+    // (*run_config)["T5_beam_sigma_x_error"] = fit_results.sigma_x_error;
+    // (*run_config)["T5_beam_sigma_y_error"] = fit_results.sigma_y_error;
+    // (*run_config)["T5_beam_mean_x"] = fit_results.mean_x;
+    // (*run_config)["T5_beam_mean_y"] = fit_results.mean_y;
+    // (*run_config)["T5_beam_mean_x_error"] = fit_results.mean_x_error;
+    // (*run_config)["T5_beam_mean_y_error"] = fit_results.mean_y_error;
+    //
+    // string sigmas_output;
+    // if (run_directory.output_path == "") {
+    //     sigmas_output = "config_out.json";
+    // } else {
+    //     sigmas_output = run_directory.output_path;
+    // }
 
-    string sigmas_output;
-    if (run_directory.output_path == "") {
-        sigmas_output = "config_out.json";
-    } else {
-        sigmas_output = run_directory.output_path;
-    }
-
-    cout << "Opening output file: " << sigmas_output
-         << " to dump fit results in" << endl;
-    std::ofstream config_file_out(sigmas_output);
-    if (config_file_out.is_open()) {
-        // The '.dump(4)' method adds a 4-space indentation for pretty
-        // formatting
-        config_file_out << config.dump(4) << std::endl;
-        config_file_out.close();
-        cout << "Successfully updated config.json with sigma_x ("
-             << fit_results.sigma_x << ") and sigma_y (" << fit_results.sigma_y
-             << ")." << endl;
-    } else {
-        cerr << "ERROR: Could not open config.json for writing!" << endl;
-        cerr << "System_error: " << std::strerror(errno) << endl;
-    }
+    // cout << "Opening output file: " << sigmas_output
+    //      << " to dump fit results in" << endl;
+    // std::ofstream config_file_out(sigmas_output);
+    // if (config_file_out.is_open()) {
+    //     // The '.dump(4)' method adds a 4-space indentation for pretty
+    //     // formatting
+    //     config_file_out << config.dump(4) << std::endl;
+    //     config_file_out.close();
+    //     cout << "Successfully updated config.json with sigma_x ("
+    //          << fit_results.sigma_x << ") and sigma_y (" <<
+    //          fit_results.sigma_y
+    //          << ")." << endl;
+    // } else {
+    //     cerr << "ERROR: Could not open config.json for writing!" << endl;
+    //     cerr << "System_error: " << std::strerror(errno) << endl;
+    // }
 
     // TFile* output_file = TFile::Open(output_path, "RECREATE");
     // if (!output_file || output_file->IsZombie()){
