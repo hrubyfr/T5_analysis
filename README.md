@@ -66,20 +66,28 @@ The output ROOT file contains one tree named `T5_Events` with the following bran
 | Branch name | Type | Description |
 | :--- | :---: | :--- |
 | `event_nr` | `Int_t` | Event number from the input tree |
-| `T5_hit_bitmask` | `Int_t` | A bitmask  |
-| `T5_n_main_bunch_particles` | `Int_t` | Number of reconstructed main-bunch hits written for this event |
-| `T5_main_hit_time` | `Double_t` | Time of the primary reconstructed hit |
-| `T5_main_hit_charge` | `Double_t` | Charge of the primary reconstructed hit |
-| `T5_main_hit_pos_x` | `Double_t` | Reconstructed x position of the primary hit [mm] |
-| `T5_main_hit_pos_y` | `Double_t` | Reconstructed y position of the primary hit [mm] |
-| `T5_main_hit_pos_x_error` | `Double_t` | Uncertainty of the reconstructed x position of the primary hit [mm] |
-| `T5_main_hit_pos_y_error` | `Double_t` | Uncertainty of the reconstructed y position of the primary hit [mm] |
-| `T5_all_hits_pos_x` | `vector<double>` | x positions of all reconstructed hits in an event |
-| `T5_all_hits_pos_y` | `vector<double>` | y positions of all reconstructed hits in an event |
-| `T5_all_hits_pos_x_error` | `vector<double>` | x positions of all reconstructed hits in an event |
-| `T5_all_hits_pos_y_error` | `vector<double>` | y positions of all reconstructed hits in an event |
-| `T5_all_hits_time` | `vector<double>` | Times of all reconstructed hits in an event |
-| `T5_all_hits_charge` | `vector<double>` | Charges of all reconstructed hits in an event (sum of individual SiPM charges) |
+| `t5_hit_bitmask` | `Int_t` | A bitmask  |
+| `t5_n_main_bunch_particles` | `Int_t` | Number of reconstructed main-bunch hits written for this event |
+| `t5_main_hit_time` | `Double_t` | Time of the primary reconstructed hit |
+| `t5_main_hit_charge` | `Double_t` | Per-bar charge of the primary reconstructed hit in raw ADC, calculated as the geometric mean of the left and right SiPM charges; not calibrated to p.e. |
+| `t5_main_hit_sipm_time_left` | `Double_t` | Time measured by the left SiPM of the primary hit (SiPM indices 8-15) |
+| `t5_main_hit_sipm_time_right` | `Double_t` | Time measured by the right SiPM of the primary hit (SiPM indices 0-7) |
+| `t5_main_hit_sipm_charge_left` | `Double_t` | Raw ADC charge measured by the left SiPM of the primary hit (SiPM indices 8-15), not p.e. |
+| `t5_main_hit_sipm_charge_right` | `Double_t` | Raw ADC charge measured by the right SiPM of the primary hit (SiPM indices 0-7), not p.e. |
+| `t5_main_hit_pos_x` | `Double_t` | Reconstructed x position of the primary hit [mm] |
+| `t5_main_hit_pos_y` | `Double_t` | Reconstructed y position of the primary hit [mm] |
+| `t5_main_hit_pos_x_error` | `Double_t` | Uncertainty of the reconstructed x position of the primary hit [mm] |
+| `t5_main_hit_pos_y_error` | `Double_t` | Uncertainty of the reconstructed y position of the primary hit [mm] |
+| `t5_all_hits_pos_x` | `vector<double>` | x positions of all reconstructed hits in an event |
+| `t5_all_hits_pos_y` | `vector<double>` | y positions of all reconstructed hits in an event |
+| `t5_all_hits_pos_x_error` | `vector<double>` | x positions of all reconstructed hits in an event |
+| `t5_all_hits_pos_y_error` | `vector<double>` | y positions of all reconstructed hits in an event |
+| `t5_all_hits_time` | `vector<double>` | Times of all reconstructed hits in an event |
+| `t5_all_hits_charge` | `vector<double>` | Per-bar charges of all reconstructed hits in raw ADC, calculated as the geometric mean of the two SiPM charges; not calibrated to p.e. |
+| `t5_all_hits_sipm_time_left` | `vector<double>` | Left SiPM times for all reconstructed hits (SiPM indices 8-15) |
+| `t5_all_hits_sipm_time_right` | `vector<double>` | Right SiPM times for all reconstructed hits (SiPM indices 0-7) |
+| `t5_all_hits_sipm_charge_left` | `vector<double>` | Raw ADC left SiPM charges for all reconstructed hits (SiPM indices 8-15), not p.e. |
+| `t5_all_hits_sipm_charge_right` | `vector<double>` | Raw ADC right SiPM charges for all reconstructed hits (SiPM indices 0-7), not p.e. |
 
 ## T5 hit bitmask
 
