@@ -110,6 +110,8 @@ event_T5_detection TOF_reconstructor::Return_position(
                 T5_hit hit;
                 hit.sipm_time_a = sipm_time_a;
                 hit.sipm_time_b = sipm_time_b;
+                hit.sipm_charge_a = sipm_charge_a;
+                hit.sipm_charge_b = sipm_charge_b;
                 hit.raw_time = (sipm_raw_time_a + sipm_raw_time_b) / 2.0;
                 hit.hit_charge = sipm_charge_a + sipm_charge_b;
                 hit.is_in_time_window = time_a_valid && time_b_valid;

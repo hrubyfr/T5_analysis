@@ -102,6 +102,8 @@ struct T5_hit {
                             // of the two SiPMs
     double sipm_time_a = -999;
     double sipm_time_b = -999;
+    double sipm_charge_a = -999;
+    double sipm_charge_b = -999;
     double raw_time = -999;
     double hit_charge = -999;
     int scintillator_id = -1;

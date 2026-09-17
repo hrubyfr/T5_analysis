@@ -451,6 +451,10 @@ int main(int argc, char **argv) {
         int b_event_nr = 0;
         double b_main_hit_time = -9999;
         double b_main_hit_charge = -9999;
+        double b_main_hit_sipm_time_left = -9999;
+        double b_main_hit_sipm_time_right = -9999;
+        double b_main_hit_sipm_charge_left = -9999;
+        double b_main_hit_sipm_charge_right = -9999;
         double b_main_position_x = -9999;
         double b_main_position_y = -9999;
         double b_main_position_x_error = -9999;
@@ -471,6 +475,18 @@ int main(int argc, char **argv) {
                             "t5_main_hit_time/D");
         output_tree->Branch("t5_main_hit_charge", &b_main_hit_charge,
                             "t5_main_hit_charge/D");
+        output_tree->Branch("t5_main_hit_sipm_time_left",
+                    &b_main_hit_sipm_time_left,
+                    "t5_main_hit_sipm_time_left/D");
+        output_tree->Branch("t5_main_hit_sipm_time_right",
+                    &b_main_hit_sipm_time_right,
+                    "t5_main_hit_sipm_time_right/D");
+        output_tree->Branch("t5_main_hit_sipm_charge_left",
+                    &b_main_hit_sipm_charge_left,
+                    "t5_main_hit_sipm_charge_left/D");
+        output_tree->Branch("t5_main_hit_sipm_charge_right",
+                    &b_main_hit_sipm_charge_right,
+                    "t5_main_hit_sipm_charge_right/D");
         output_tree->Branch("t5_main_hit_pos_x", &b_main_position_x,
                             "t5_main_hit_pos_x/D");
         output_tree->Branch("t5_main_hit_pos_y", &b_main_position_y,
@@ -490,6 +506,14 @@ int main(int argc, char **argv) {
         std::vector<double> *b_all_hits_pos_y_error = new std::vector<double>();
         std::vector<double> *b_all_hits_time = new std::vector<double>();
         std::vector<double> *b_all_hits_charge = new std::vector<double>();
+        std::vector<double> *b_all_hits_sipm_time_left =
+            new std::vector<double>();
+        std::vector<double> *b_all_hits_sipm_time_right =
+            new std::vector<double>();
+        std::vector<double> *b_all_hits_sipm_charge_left =
+            new std::vector<double>();
+        std::vector<double> *b_all_hits_sipm_charge_right =
+            new std::vector<double>();
         // std::vector<int> *b_all_hits_scintillator_id = new
         // std::vector<int>();
         vector<int> *b_all_hits_is_in_time_window = new std::vector<int>();
@@ -501,6 +525,14 @@ int main(int argc, char **argv) {
         output_tree->Branch("t5_all_hits_pos_y_error", &b_all_hits_pos_y_error);
         output_tree->Branch("t5_all_hits_time", &b_all_hits_time);
         output_tree->Branch("t5_all_hits_charge", &b_all_hits_charge);
+        output_tree->Branch("t5_all_hits_sipm_time_left",
+                    &b_all_hits_sipm_time_left);
+        output_tree->Branch("t5_all_hits_sipm_time_right",
+                    &b_all_hits_sipm_time_right);
+        output_tree->Branch("t5_all_hits_sipm_charge_left",
+                    &b_all_hits_sipm_charge_left);
+        output_tree->Branch("t5_all_hits_sipm_charge_right",
+                    &b_all_hits_sipm_charge_right);
         // output_tree->Branch("t5_all_hits_scintillator_id",
         //                     &b_all_hits_scintillator_id);
         output_tree->Branch("t5_all_hits_is_in_time_window",
@@ -525,6 +557,10 @@ int main(int argc, char **argv) {
 
             b_main_hit_charge = -9999;
             b_main_hit_time = -9999;
+            b_main_hit_sipm_time_left = -9999;
+            b_main_hit_sipm_time_right = -9999;
+            b_main_hit_sipm_charge_left = -9999;
+            b_main_hit_sipm_charge_right = -9999;
             b_main_position_x = -9999;
             b_main_position_y = -9999;
             b_main_position_x_error = -9999;
@@ -533,6 +569,10 @@ int main(int argc, char **argv) {
 
             b_all_hits_time->clear();
             b_all_hits_charge->clear();
+            b_all_hits_sipm_time_left->clear();
+            b_all_hits_sipm_time_right->clear();
+            b_all_hits_sipm_charge_left->clear();
+            b_all_hits_sipm_charge_right->clear();
             b_all_hits_pos_x->clear();
             b_all_hits_pos_y->clear();
             b_all_hits_pos_x_error->clear();
@@ -546,6 +586,10 @@ int main(int argc, char **argv) {
             for (const auto &hit : event.T5_hits) {
                 b_all_hits_time->push_back(hit.raw_time);
                 b_all_hits_charge->push_back(hit.hit_charge);
+                b_all_hits_sipm_time_left->push_back(hit.sipm_time_b);
+                b_all_hits_sipm_time_right->push_back(hit.sipm_time_a);
+                b_all_hits_sipm_charge_left->push_back(hit.sipm_charge_b);
+                b_all_hits_sipm_charge_right->push_back(hit.sipm_charge_a);
                 b_all_hits_pos_x->push_back(hit.position_x);
                 b_all_hits_pos_y->push_back(hit.position_y);
                 b_all_hits_pos_x_error->push_back(hit.uncertainty);
@@ -593,6 +637,14 @@ int main(int argc, char **argv) {
 
                     b_main_hit_time = main_hit_candidate->raw_time;
                     b_main_hit_charge = main_hit_candidate->hit_charge;
+                    b_main_hit_sipm_time_left =
+                        main_hit_candidate->sipm_time_b;
+                    b_main_hit_sipm_time_right =
+                        main_hit_candidate->sipm_time_a;
+                    b_main_hit_sipm_charge_left =
+                        main_hit_candidate->sipm_charge_b;
+                    b_main_hit_sipm_charge_right =
+                        main_hit_candidate->sipm_charge_a;
                     b_main_position_x = main_hit_candidate->position_x;
                     b_main_position_y = main_hit_candidate->position_y;
                     b_main_position_x_error = main_hit_candidate->uncertainty;
@@ -636,6 +688,10 @@ int main(int argc, char **argv) {
 
         delete b_all_hits_charge;
         delete b_all_hits_time;
+        delete b_all_hits_sipm_time_left;
+        delete b_all_hits_sipm_time_right;
+        delete b_all_hits_sipm_charge_left;
+        delete b_all_hits_sipm_charge_right;
         delete b_all_hits_pos_x;
         delete b_all_hits_pos_y;
         delete b_all_hits_pos_x_error;
